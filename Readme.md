@@ -16,8 +16,12 @@ A robust and type-safe implementation of the Mutex pattern in TypeScript, inspir
 - **Async/Await Support**: First-class support for asynchronous operations
 - **Zero Dependencies**: Pure TypeScript implementation
 - **Deadlock Prevention**: Built-in queue management system
+- **Collection Support**: MutexCollection for managing multiple mutexes
+- **Resource Pooling**: Efficient handling of multiple resources with key-based locking
 
 ## 🚀 Quick Start
+
+### Basic Mutex Usage
 
 ```typescript
 import { Mutex } from './mutex';
@@ -36,6 +40,28 @@ async function increment() {
     // Release the lock
     guard.release();
   }
+}
+```
+
+### MutexCollection Usage
+
+```typescript
+import { MutexCollection } from './mutex';
+
+// Create a collection of mutexes with a default value factory
+const collection = new MutexCollection<string, number>(() => 0);
+
+// Using withLock for automatic lock management
+await collection.withLock("counter1", async (value) => {
+  return value + 1;
+});
+
+// Manual lock management
+const guard = await collection.lock("counter2");
+try {
+  guard.value += 1;
+} finally {
+  guard.release();
 }
 ```
 
@@ -76,6 +102,37 @@ const mutex = Mutex.new<T>(initialValue: T)
   - Releases the mutex lock
   - Safe to call multiple times
 
+### `MutexCollection<K, V>`
+
+#### Creation
+```typescript
+const collection = new MutexCollection<K, V>((key: K) => V)
+```
+
+#### Methods
+
+- **`lock(key: K): Promise<MutexGuard<V>>`**
+  - Acquires a mutex for the specified key
+  - Creates a new mutex if one doesn't exist
+
+- **`tryLock(key: K): MutexGuard<V> | null`**
+  - Attempts to acquire the mutex for the specified key
+  - Returns null if the mutex is locked
+
+- **`withLock<R>(key: K, fn: (value: V) => Promise<R>): Promise<R>`**
+  - Executes a function with automatic lock management
+  - Ensures the lock is released after execution
+
+- **`has(key: K): boolean`**
+  - Checks if a mutex exists for the specified key
+
+- **`remove(key: K): boolean`**
+  - Removes an unlocked mutex from the collection
+  - Returns false if the mutex is locked
+
+- **`size(): number`**
+  - Returns the number of mutexes in the collection
+
 ## 🔍 Examples
 
 ### Basic Usage
@@ -90,6 +147,18 @@ async function addItem(item: number) {
   } finally {
     guard.release();
   }
+}
+```
+
+### Collection Usage
+
+```typescript
+const userScores = new MutexCollection<string, number>(() => 0);
+
+async function updateScore(userId: string, points: number) {
+  await userScores.withLock(userId, async (score) => {
+    return score + points;
+  });
 }
 ```
 

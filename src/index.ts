@@ -66,12 +66,10 @@ export class Mutex<T> {
     this[valueSymbol] = value;
   }
 
-  // Similar to Rust's Mutex::new
   public static new<T>(value: T): Mutex<T> {
     return new Mutex(value);
   }
 
-  // Similar to Rust's Mutex::lock
   public async lock(): Promise<MutexGuard<T>> {
     const deferred = createDeferred<MutexGuard<T>>();
     this.#queue.push(deferred);
@@ -79,7 +77,6 @@ export class Mutex<T> {
     return deferred.promise;
   }
 
-  // Similar to Rust's Mutex::try_lock
   public tryLock(): MutexGuard<T> | null {
     if (this.#currentGuard !== undefined) {
       return null;
@@ -87,7 +84,6 @@ export class Mutex<T> {
     return this.createGuard();
   }
 
-  // Similar to Rust's Mutex::into_inner
   public intoInner(): T {
     if (this.#currentGuard !== undefined) {
       throw new Error("Cannot consume mutex while it is locked");
@@ -122,5 +118,81 @@ export class Mutex<T> {
 
     this.#currentGuard = undefined;
     this.processQueue();
+  }
+}
+
+// MutexCollection for managing multiple mutexes
+export class MutexCollection<K, V> {
+  #mutexes = new Map<K, Mutex<V>>();
+
+  constructor(private readonly defaultValueFactory: (key: K) => V) {}
+
+  public async lock(key: K): Promise<MutexGuard<V>> {
+    const mutex = this.getOrCreateMutex(key);
+    return mutex.lock();
+  }
+
+  public tryLock(key: K): MutexGuard<V> | null {
+    const mutex = this.getOrCreateMutex(key);
+    return mutex.tryLock();
+  }
+
+  public has(key: K): boolean {
+    return this.#mutexes.has(key);
+  }
+
+  public remove(key: K): boolean {
+    const mutex = this.#mutexes.get(key);
+    if (!mutex) return false;
+
+    try {
+      mutex.intoInner(); // Will throw if mutex is locked
+      this.#mutexes.delete(key);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  public clear(): void {
+    const lockedKeys: K[] = [];
+    
+    this.#mutexes.forEach((mutex, key) => {
+      try {
+        mutex.intoInner(); // Will throw if mutex is locked
+      } catch {
+        lockedKeys.push(key);
+      }
+    });
+
+    if (lockedKeys.length > 0) {
+      throw new Error(
+        `Cannot clear collection: mutexes are locked for keys: ${lockedKeys.join(", ")}`
+      );
+    }
+
+    this.#mutexes.clear();
+  }
+
+  public async withLock<R>(key: K, fn: (value: V) => Promise<R>): Promise<R> {
+    const guard = await this.lock(key);
+    try {
+      return await fn(guard.value);
+    } finally {
+      guard.release();
+    }
+  }
+
+  public size(): number {
+    return this.#mutexes.size;
+  }
+
+  private getOrCreateMutex(key: K): Mutex<V> {
+    let mutex = this.#mutexes.get(key);
+    if (!mutex) {
+      mutex = Mutex.new(this.defaultValueFactory(key));
+      this.#mutexes.set(key, mutex);
+    }
+    return mutex;
   }
 }

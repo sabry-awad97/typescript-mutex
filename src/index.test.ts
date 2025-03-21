@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { Mutex, createDeferred } from "./index";
+import { Mutex, MutexCollection, createDeferred } from "./index";
 
 describe("Mutex", () => {
   let mutex: Mutex<number>;
@@ -253,6 +253,136 @@ describe("Mutex", () => {
     it("should throw on into_inner when locked", async () => {
       const guard = await mutex.lock();
       expect(() => mutex.intoInner()).toThrow();
+      guard.release();
+    });
+  });
+});
+
+describe("MutexCollection", () => {
+  let collection: MutexCollection<string, number>;
+
+  beforeEach(() => {
+    collection = new MutexCollection((key) => 0);
+  });
+
+  describe("Basic Operations", () => {
+    it("should create mutex on demand", async () => {
+      const guard = await collection.lock("key1");
+      expect(guard.value).toBe(0);
+      guard.release();
+    });
+
+    it("should maintain separate values for different keys", async () => {
+      const guard1 = await collection.lock("key1");
+      const guard2 = await collection.lock("key2");
+
+      guard1.value = 1;
+      guard2.value = 2;
+
+      expect(guard1.value).toBe(1);
+      expect(guard2.value).toBe(2);
+
+      guard1.release();
+      guard2.release();
+    });
+  });
+
+  describe("Lock Management", () => {
+    it("should prevent concurrent access to same key", async () => {
+      const guard1 = await collection.lock("key1");
+      const guard2Promise = collection.lock("key1");
+
+      const guard2Resolved = await Promise.race([
+        guard2Promise.then(() => true),
+        new Promise((resolve) => setTimeout(() => resolve(false), 50)),
+      ]);
+
+      expect(guard2Resolved).toBe(false);
+      guard1.release();
+
+      const guard2 = await guard2Promise;
+      guard2.release();
+    });
+
+    it("should allow concurrent access to different keys", async () => {
+      const guard1Promise = collection.lock("key1");
+      const guard2Promise = collection.lock("key2");
+
+      const [guard1, guard2] = await Promise.all([
+        guard1Promise,
+        guard2Promise,
+      ]);
+
+      guard1.release();
+      guard2.release();
+    });
+  });
+
+  describe("Collection Management", () => {
+    it("should track collection size", async () => {
+      expect(collection.size()).toBe(0);
+
+      const guard1 = await collection.lock("key1");
+      expect(collection.size()).toBe(1);
+
+      const guard2 = await collection.lock("key2");
+      expect(collection.size()).toBe(2);
+
+      guard1.release();
+      guard2.release();
+    });
+
+    it("should check key existence", async () => {
+      expect(collection.has("key1")).toBe(false);
+
+      const guard = await collection.lock("key1");
+      expect(collection.has("key1")).toBe(true);
+
+      guard.release();
+    });
+
+    it("should remove unlocked mutex", async () => {
+      const guard = await collection.lock("key1");
+      guard.release();
+
+      expect(collection.remove("key1")).toBe(true);
+      expect(collection.has("key1")).toBe(false);
+    });
+
+    it("should not remove locked mutex", async () => {
+      const guard = await collection.lock("key1");
+      expect(collection.remove("key1")).toBe(false);
+      expect(collection.has("key1")).toBe(true);
+      guard.release();
+    });
+  });
+
+  describe("Convenience Methods", () => {
+    it("should execute function with lock", async () => {
+      const result = await collection.withLock("key1", async (value) => {
+        expect(value).toBe(0);
+        return 42;
+      });
+
+      expect(result).toBe(42);
+    });
+
+    it("should release lock after function execution", async () => {
+      await collection.withLock("key1", async () => {});
+      const guard = await collection.lock("key1");
+      guard.release();
+    });
+
+    it("should release lock even if function throws", async () => {
+      const error = new Error("Test error");
+
+      await expect(
+        collection.withLock("key1", async () => {
+          throw error;
+        })
+      ).rejects.toThrow(error);
+
+      const guard = await collection.lock("key1");
       guard.release();
     });
   });
