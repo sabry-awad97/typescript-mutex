@@ -1,10 +1,10 @@
-export type Deferred<T> = {
+interface Deferred<T> {
   promise: Promise<T>;
   resolve(value: T): void;
   reject(reason: unknown): void;
-};
+}
 
-export function createDeferred<T>() {
+export function createDeferred<T>(): Deferred<T> {
   const deferred: Partial<Deferred<T>> = {
     promise: undefined,
     resolve: undefined,
@@ -20,100 +20,107 @@ export function createDeferred<T>() {
   return deferred as Deferred<T>;
 }
 
-export interface Lock<T> {
-  value(): T;
-  setValue(newValue: T): T;
-  release(): void;
-}
+const unlockSymbol = Symbol("unlockInternal");
+const valueSymbol = Symbol("valueInternal");
 
-const GetValueSymbol = Symbol("GetValue");
-const SetValueSymbol = Symbol("SetValue");
-const UnlockSymbol = Symbol("Unlock");
+// Similar to Rust's MutexGuard
+class MutexGuard<T> {
+  #isReleased = false;
+  #value: T;
 
-class LockImpl<T> implements Lock<T> {
-  private isReleased = false;
-
-  public constructor(private mutex: Mutex<T>) {}
-
-  public value(): T {
-    if (this.isReleased) {
-      throw new Error(`Can't read value from released Lock`);
-    }
-    return this.mutex[GetValueSymbol]();
+  constructor(private mutex: Mutex<T>, value: T) {
+    this.#value = value;
   }
-  public setValue(newValue: T): T {
-    if (this.isReleased) {
-      throw new Error(`Can't write value to released Lock`);
-    }
 
-    return this.mutex[SetValueSymbol](newValue);
+  public get value(): T {
+    if (this.#isReleased) {
+      throw new Error("Cannot use a released MutexGuard");
+    }
+    return this.#value;
   }
+
+  public set value(newValue: T) {
+    if (this.#isReleased) {
+      throw new Error("Cannot use a released MutexGuard");
+    }
+    this.#value = newValue;
+    this.mutex[valueSymbol] = newValue;
+  }
+
   public release(): void {
-    if (this.isReleased) {
+    if (this.#isReleased) {
       return;
     }
-    this.isReleased = true;
-    this.mutex[UnlockSymbol](this);
+    this.#isReleased = true;
+    this.mutex[unlockSymbol](this);
   }
 }
 
+// Similar to Rust's Mutex
 export class Mutex<T> {
-  private currentLock: Lock<T> | undefined;
-  private queue: Deferred<Lock<T>>[] = [];
-  private value: T;
+  #currentGuard: MutexGuard<T> | undefined;
+  #queue: Deferred<MutexGuard<T>>[] = [];
+  private [valueSymbol]: T;
 
-  constructor(value: T) {
-    this.value = value;
+  private constructor(value: T) {
+    this[valueSymbol] = value;
   }
 
-  private [GetValueSymbol](): T {
-    return this.value;
+  // Similar to Rust's Mutex::new
+  public static new<T>(value: T): Mutex<T> {
+    return new Mutex(value);
   }
 
-  private [SetValueSymbol](newValue: T): T {
-    const oldValue = this.value;
-    this.value = newValue;
-    return oldValue;
-  }
-
-  private lock(): Lock<T> {
-    this.currentLock = new LockImpl<T>(this);
-    return this.currentLock;
-  }
-
-  private [UnlockSymbol](lock: Lock<T>): void {
-    if (this.currentLock !== lock) {
-      throw Error(
-        "The lock given to free, is not currently assigned to this mutex!. Something really strange happend!"
-      );
-    }
-
-    this.currentLock = undefined;
+  // Similar to Rust's Mutex::lock
+  public async lock(): Promise<MutexGuard<T>> {
+    const deferred = createDeferred<MutexGuard<T>>();
+    this.#queue.push(deferred);
     this.processQueue();
+    return deferred.promise;
+  }
+
+  // Similar to Rust's Mutex::try_lock
+  public tryLock(): MutexGuard<T> | null {
+    if (this.#currentGuard !== undefined) {
+      return null;
+    }
+    return this.createGuard();
+  }
+
+  // Similar to Rust's Mutex::into_inner
+  public intoInner(): T {
+    if (this.#currentGuard !== undefined) {
+      throw new Error("Cannot consume mutex while it is locked");
+    }
+    return this[valueSymbol];
+  }
+
+  private createGuard(): MutexGuard<T> {
+    const guard = new MutexGuard(this, this[valueSymbol]);
+    this.#currentGuard = guard;
+    return guard;
   }
 
   private processQueue(): void {
-    if (this.queue.length === 0) {
+    if (this.#queue.length === 0) {
       return;
     }
 
-    if (this.currentLock === undefined) {
-      const lock = this.lock();
-      const q = this.queue.shift();
-      if (q) {
-        q.resolve(lock);
+    if (this.#currentGuard === undefined) {
+      const guard = this.createGuard();
+      const deferred = this.#queue.shift();
+      if (deferred) {
+        deferred.resolve(guard);
       }
     }
   }
 
-  public isAcquired(): boolean {
-    return this.currentLock !== undefined;
-  }
+  private [unlockSymbol](guard: MutexGuard<T>): void {
+    if (this.#currentGuard !== guard) {
+      throw new Error("Invalid guard provided for unlock operation");
+    }
 
-  public async acquire(): Promise<Lock<T>> {
-    const deferred = createDeferred<Lock<T>>();
-    this.queue.push(deferred);
+    this.#currentGuard = undefined;
     this.processQueue();
-    return deferred.promise;
   }
 }
