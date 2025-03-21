@@ -1,0 +1,28 @@
+{
+	"name": "typescript-boilerplate",
+	"version": "1.0.0",
+	"description": "",
+	"main": "src/index.ts",
+	"type": "module",
+	"scripts": {
+		"dev": "cross-env tsx .",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"test:ui": "vitest --ui"
+	},
+	"keywords": [],
+	"author": "",
+	"license": "ISC",
+	"devDependencies": {
+		"@total-typescript/ts-reset": "^0.6.1",
+		"@types/node": "^22.13.11",
+		"@vitest/ui": "^3.0.9",
+		"cross-env": "^7.0.3",
+		"nodemon": "^3.1.9",
+		"tsx": "^4.19.3",
+		"vitest": "^3.0.9"
+	},
+	"dependencies": {
+		"zod": "^3.24.2"
+	}
+}
